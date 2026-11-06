@@ -13,9 +13,9 @@ import kotlin.math.hypot
 class InkView(context: Context, private val listener: Listener) : View(context) {
 
     interface Listener {
-        fun onStrokeStart()
-        fun onStrokeEnd()
-        fun onErase()
+        fun onStrokeStart(pad: InkView)
+        fun onStrokeEnd(pad: InkView)
+        fun onErase(pad: InkView)
     }
 
     data class Pt(val x: Float, val y: Float, val t: Long, val p: Float)
@@ -49,6 +49,11 @@ class InkView(context: Context, private val listener: Listener) : View(context) 
 
     val isEmpty get() = strokes.isEmpty()
 
+    /** When the oldest stroke still on the pad was started (for ordering two pads). */
+    val firstTime get() = strokes.firstOrNull()?.firstOrNull()?.t ?: Long.MAX_VALUE
+
+    var hint = "Write here with your S Pen"
+
     private fun accepts(tool: Int) = when (tool) {
         MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER -> true
         MotionEvent.TOOL_TYPE_FINGER -> !penOnly
@@ -74,7 +79,7 @@ class InkView(context: Context, private val listener: Listener) : View(context) 
                         val s = mutableListOf(pt(e, idx))
                         current = s
                         strokes.add(s)
-                        listener.onStrokeStart()
+                        listener.onStrokeStart(this)
                         invalidate()
                     }
                 }
@@ -112,12 +117,12 @@ class InkView(context: Context, private val listener: Listener) : View(context) 
         activeId = -1
         if (erasing) {
             erasing = false
-            listener.onErase()
+            listener.onErase(this)
             return
         }
         if (current != null) {
             current = null
-            listener.onStrokeEnd()
+            listener.onStrokeEnd(this)
         }
     }
 
@@ -168,7 +173,7 @@ class InkView(context: Context, private val listener: Listener) : View(context) 
         val base = height * 0.68f
         c.drawLine(24f * dp, base, width - 24f * dp, base, guidePaint)
         if (strokes.isEmpty()) {
-            c.drawText(if (penOnly) "Write here with your S Pen" else "Write here",
+            c.drawText(hint,
                 width / 2f, height * 0.45f, hintPaint)
         }
         for (s in strokes) {

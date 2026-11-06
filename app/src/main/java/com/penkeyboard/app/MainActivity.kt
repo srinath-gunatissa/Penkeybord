@@ -21,6 +21,9 @@ object Prefs {
     const val PEN_ONLY = "pen_only"
     const val DELAY_MS = "delay_ms"
     const val PAD_HEIGHT = "pad_height"
+    const val SINGLISH = "singlish"
+    const val WORDS = "learned_words"
+    const val CLIPS = "clips"
 }
 
 /** Setup screen: turn the keyboard on, choose it, tweak settings, try it out. */
@@ -117,12 +120,23 @@ class MainActivity : Activity() {
             "• ⌫ removes your last stroke while you're still writing.\n" +
             "• Hold the S Pen button and rub to erase strokes.\n" +
             "• ⌨ switches back to your normal keyboard.\n\n" +
+            "Keyboard buttons:\n" +
+            "• Two writing boxes: write in one while the other turns into text.\n" +
+            "• 123 → numbers & symbols, Edit (copy, paste, undo, arrows), emoji, clipboard.\n" +
+            "• සිං → Singlish: \"mama gedara yanawa\" becomes මම ගෙදර යනව.\n" +
+            "  (Use capital T D N L for ට ඩ ණ ළ.) When off, the Sinhala version is still in suggestions.\n" +
+            "• It learns the words you use and suggests them first.\n\n" +
             "Pen gestures:\n" +
             "• Scribble over writing → erase it\n" +
             "• Scribble on an empty pad → delete the last word\n" +
             "• Long line left → right → space\n" +
             "• Long line right → left → backspace\n" +
             "• Line down, then left (↵) → Enter", 15f))
+
+        col.addView(Button(this).apply {
+            text = "Forget learned words"
+            setOnClickListener { WordMemory(this@MainActivity).forgetAll(); text = "✓ Learned words cleared" }
+        })
 
         setContentView(ScrollView(this).apply { addView(col) })
     }
