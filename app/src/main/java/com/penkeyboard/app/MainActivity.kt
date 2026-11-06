@@ -112,10 +112,17 @@ class MainActivity : Activity() {
 
         col.addView(text(
             "Tips:\n• Write a word or a short phrase, then pause.\n" +
+            "• Write in English or Sinhala — no switching needed.\n" +
             "• Tap a suggestion at the top to fix a word.\n" +
             "• ⌫ removes your last stroke while you're still writing.\n" +
             "• Hold the S Pen button and rub to erase strokes.\n" +
-            "• ⌨ switches back to your normal keyboard.", 15f))
+            "• ⌨ switches back to your normal keyboard.\n\n" +
+            "Pen gestures:\n" +
+            "• Scribble over writing → erase it\n" +
+            "• Scribble on an empty pad → delete the last word\n" +
+            "• Long line left → right → space\n" +
+            "• Long line right → left → backspace\n" +
+            "• Line down, then left (↵) → Enter", 15f))
 
         setContentView(ScrollView(this).apply { addView(col) })
     }
@@ -125,13 +132,16 @@ class MainActivity : Activity() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         val on = imm.enabledInputMethodList.any { it.packageName == packageName }
         enabledText.text = if (on) "✓ Pen Keyboard is turned on" else "Pen Keyboard is not turned on yet"
-        InkEngine.ensure { s ->
-            status.text = "Handwriting model: " + when (s) {
-                InkEngine.State.READY -> "✓ ready (works offline)"
-                InkEngine.State.DOWNLOADING -> "downloading (one time, needs internet)…"
-                InkEngine.State.FAILED -> "download failed. Check internet and reopen this app."
-                InkEngine.State.CHECKING -> "checking…"
-            }
+        InkEngine.ensure {
+            status.text = "Handwriting languages (detected automatically):\n" +
+                InkEngine.LANGS.joinToString("\n") { lang ->
+                    "• ${lang.name}: " + when (InkEngine.states[lang.tag]) {
+                        InkEngine.State.READY -> "✓ ready (works offline)"
+                        InkEngine.State.DOWNLOADING -> "downloading (one time, needs internet)…"
+                        InkEngine.State.FAILED -> "not available. Check internet and reopen this app."
+                        else -> "checking…"
+                    }
+                }
         }
     }
 }

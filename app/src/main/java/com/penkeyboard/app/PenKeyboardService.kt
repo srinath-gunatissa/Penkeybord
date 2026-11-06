@@ -76,7 +76,7 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
         root.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(52)))
 
         showStatus("Getting handwriting ready…")
-        InkEngine.ensure { onEngineState(it) }
+        InkEngine.ensure { onEngineState() }
         return root
     }
 
@@ -87,7 +87,7 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
         ink.clear()
         lastCommit = null
         handler.removeCallbacks(autoRecognize)
-        InkEngine.ensure { onEngineState(it) }
+        InkEngine.ensure { onEngineState() }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -95,19 +95,51 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
         super.onFinishInputView(finishingInput)
     }
 
-    private fun onEngineState(s: InkEngine.State) {
-        when (s) {
-            InkEngine.State.READY -> if (lastCommit == null) showStatus("")
-            InkEngine.State.DOWNLOADING -> showStatus("Downloading handwriting model (one time, needs Wi-Fi)…")
-            InkEngine.State.FAILED -> showStatus("Couldn't download the handwriting model. Check internet and reopen.")
-            InkEngine.State.CHECKING -> showStatus("Getting handwriting ready…")
+    private fun onEngineState() {
+        if (lastCommit != null) return
+        val downloading = InkEngine.LANGS.filter { InkEngine.states[it.tag] == InkEngine.State.DOWNLOADING }
+        when {
+            downloading.isNotEmpty() ->
+                showStatus("Downloading ${downloading.joinToString(" + ") { it.name }} handwriting (one time, needs Wi-Fi)…")
+            InkEngine.state == InkEngine.State.READY -> showStatus("")
+            InkEngine.state == InkEngine.State.FAILED ->
+                showStatus("Couldn't download the handwriting models. Check internet and reopen.")
+            else -> showStatus("Getting handwriting ready…")
         }
     }
 
     // ---- InkView.Listener ----
     override fun onStrokeStart() { handler.removeCallbacks(autoRecognize) }
-    override fun onStrokeEnd() { scheduleRecognize() }
+
+    override fun onStrokeEnd() {
+        val stroke = ink.strokes.lastOrNull() ?: return
+        val others = ink.strokes.dropLast(1)
+        when (val g = Gestures.classify(stroke, others, ink.width.toFloat(), dp)) {
+            is Gestures.G.EraseStrokes -> {
+                ink.removeStrokes(g.strokes + listOf(stroke))
+                if (ink.isEmpty) handler.removeCallbacks(autoRecognize) else scheduleRecognize()
+            }
+            Gestures.G.DeleteWord -> { ink.removeStrokes(listOf(stroke)); deleteWord() }
+            Gestures.G.Space -> { ink.removeStrokes(listOf(stroke)); space() }
+            Gestures.G.Backspace -> { ink.removeStrokes(listOf(stroke)); backspace() }
+            Gestures.G.Enter -> { ink.removeStrokes(listOf(stroke)); enter() }
+            Gestures.G.None -> scheduleRecognize()
+        }
+    }
+
     override fun onErase() { if (!ink.isEmpty) scheduleRecognize() }
+
+    /** Delete the word before the cursor (and the space before it). */
+    private fun deleteWord() {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(60, 0)?.toString() ?: return
+        if (before.isEmpty()) return
+        var i = before.length
+        while (i > 0 && before[i - 1].isWhitespace()) i--
+        while (i > 0 && !before[i - 1].isWhitespace()) i--
+        ic.deleteSurroundingText(before.length - i, 0)
+        forgetLast()
+    }
 
     private fun scheduleRecognize() {
         handler.removeCallbacks(autoRecognize)
@@ -119,9 +151,9 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
         handler.removeCallbacks(autoRecognize)
         if (ink.isEmpty) { after?.invoke(); return }
         if (recognizing) { handler.postDelayed({ recognize(after) }, 120); return }
-        val rec = InkEngine.recognizer
-        if (rec == null) {
-            InkEngine.ensure { onEngineState(it) }
+        val recs = InkEngine.recognizers.toMap()
+        if (recs.isEmpty()) {
+            InkEngine.ensure { onEngineState() }
             return
         }
         val ic = currentInputConnection ?: return
@@ -131,24 +163,64 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
             .setWritingArea(WritingArea(ink.width.toFloat(), ink.height.toFloat()))
             .build()
         val count = ink.strokes.size
+        val inkObj = ink.toInk(count)
+        val preferred = preferredLang(pre)
+
+        // Run every language at once, then pick the best fit.
+        val results = mutableMapOf<String, List<Pair<String, Float?>>>()
+        var pending = recs.size
         recognizing = true
-        rec.recognize(ink.toInk(count), context)
-            .addOnSuccessListener { result ->
-                recognizing = false
-                val options = result.candidates.map { it.text.trim() }.filter { it.isNotEmpty() }.distinct()
-                if (options.isEmpty()) {
-                    showStatus("Couldn't read that. Try writing a bit bigger.")
-                    return@addOnSuccessListener
+        fun done() {
+            pending--
+            if (pending > 0) return
+            recognizing = false
+            val winner = pickLanguage(results, preferred)
+            if (winner == null) {
+                showStatus("Couldn't read that. Try writing a bit bigger.")
+                return
+            }
+            stickyLang = winner
+            val options = mutableListOf<Pair<String, String>>()
+            results[winner]!!.take(5).forEach { options.add(it.first to winner) }
+            results.filterKeys { it != winner }.forEach { (tag, list) ->
+                list.take(3).forEach { options.add(it.first to tag) }
+            }
+            val unique = options.distinctBy { it.first }
+            ink.removeFirst(count)
+            commitWord(unique[0].first, pre)
+            showCandidates(unique)
+            after?.invoke()
+        }
+        for ((tag, rec) in recs) {
+            rec.recognize(inkObj, context)
+                .addOnSuccessListener { r ->
+                    results[tag] = r.candidates
+                        .map { it.text.trim() to it.score }
+                        .filter { it.first.isNotEmpty() }
+                    done()
                 }
-                ink.removeFirst(count)
-                commitWord(options[0], pre)
-                showCandidates(options)
-                after?.invoke()
-            }
-            .addOnFailureListener {
-                recognizing = false
-                showStatus("Couldn't read that. Try again.")
-            }
+                .addOnFailureListener { done() }
+        }
+    }
+
+    /** The language used last in this text box gets a small head start. */
+    private var stickyLang = "en-US"
+
+    private fun preferredLang(pre: String): String {
+        val c = pre.lastOrNull { it.isLetter() } ?: return stickyLang
+        return if (c.code in 0x0D80..0x0DFF) "si" else if (c.code < 0x0250) "en-US" else stickyLang
+    }
+
+    private fun pickLanguage(results: Map<String, List<Pair<String, Float?>>>, preferred: String): String? {
+        val tops = results.filterValues { it.isNotEmpty() }.mapValues { it.value[0].second }
+        if (tops.isEmpty()) return null
+        if (tops.size == 1) return tops.keys.first()
+        // ML Kit scores: lower is better. Without scores, stay with the preferred language.
+        if (tops.values.any { it == null }) return if (preferred in tops) preferred else tops.keys.first()
+        return tops.minByOrNull { (tag, score) ->
+            val s = score!!
+            if (tag == preferred) (if (s > 0) s * 0.85f else s - 0.5f) else s
+        }!!.key
     }
 
     private fun commitWord(text: String, pre: String) {
@@ -237,9 +309,9 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
         })
     }
 
-    private fun showCandidates(options: List<String>) {
+    private fun showCandidates(options: List<Pair<String, String>>) {
         candBar.removeAllViews()
-        options.take(8).forEachIndexed { i, word ->
+        options.take(9).forEachIndexed { i, (word, tag) ->
             candBar.addView(TextView(this).apply {
                 text = word; textSize = 17f
                 setTextColor(if (i == 0) 0xFF2F6FDE.toInt() else 0xFF1F2A37.toInt())
@@ -248,7 +320,8 @@ class PenKeyboardService : InputMethodService(), InkView.Listener {
                 background = pill(0xFFFFFFFF.toInt())
                 setOnClickListener {
                     replaceLast(word)
-                    showCandidates(listOf(word) + options.filter { it != word })
+                    stickyLang = tag
+                    showCandidates(listOf(word to tag) + options.filter { it.first != word })
                 }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = px(6) })

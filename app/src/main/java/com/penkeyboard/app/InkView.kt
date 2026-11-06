@@ -133,6 +133,11 @@ class InkView(context: Context, private val listener: Listener) : View(context) 
         strokes.clear(); current = null; activeId = -1; invalidate()
     }
 
+    fun removeStrokes(list: List<List<Pt>>) {
+        strokes.removeAll { s -> list.any { it === s } }
+        invalidate()
+    }
+
     fun undoStroke() {
         if (strokes.isNotEmpty()) strokes.removeAt(strokes.size - 1)
         invalidate()
